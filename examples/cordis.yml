@@ -1,0 +1,9 @@
+# Example dsh composition config for dsh-tool-mongodb.
+# Keep credentials in a secret manager/environment-backed deployment config;
+# URLs with passwords are redacted in every tool output.
+
+- name: 'github:LJH-snow/dsh-tool-mongodb'
+  config:
+    # url: 'mongodb://127.0.0.1:27017'
+    urlEnv: 'MONGO_URL'
+    # serverSelectionTimeoutMs: 5000
