@@ -2,7 +2,7 @@
  * The connection is created lazily so importing this module never opens a socket. */
 
 import { MongoClient } from 'mongodb'
-import type { MongoAccess } from './client.js'
+import type { MongoAccess, MongoOperationOptions } from './client.js'
 
 export class NodeMongoAccess implements MongoAccess {
   private readonly url: string
@@ -51,31 +51,31 @@ export class NodeMongoAccess implements MongoAccess {
     return items.map(item => ({ name: item.name, type: item.type ?? 'collection' }))
   }
 
-  async countDocuments(database: string, collection: string, filter: Record<string, unknown>): Promise<number> {
+  async countDocuments(database: string, collection: string, filter: Record<string, unknown>, options: MongoOperationOptions = {}): Promise<number> {
     await this.ready()
-    return await this.client.db(database).collection(collection).countDocuments(filter)
+    return await this.client.db(database).collection(collection).countDocuments(filter, { maxTimeMS: options.maxTimeMS })
   }
 
-  async findDocuments(database: string, collection: string, filter: Record<string, unknown>, limit: number): Promise<unknown[]> {
+  async findDocuments(database: string, collection: string, filter: Record<string, unknown>, limit: number, options: MongoOperationOptions = {}): Promise<unknown[]> {
     await this.ready()
-    return await this.client.db(database).collection(collection).find(filter, { limit }).toArray()
+    return await this.client.db(database).collection(collection).find(filter, { limit, maxTimeMS: options.maxTimeMS }).toArray()
   }
 
-  async insertOne(database: string, collection: string, doc: Record<string, unknown>): Promise<{ insertedId: string }> {
+  async insertOne(database: string, collection: string, doc: Record<string, unknown>, options: MongoOperationOptions = {}): Promise<{ insertedId: string }> {
     await this.ready()
-    const result = await this.client.db(database).collection(collection).insertOne(doc)
+    const result = await this.client.db(database).collection(collection).insertOne(doc, { maxTimeMS: options.maxTimeMS })
     return { insertedId: String(result.insertedId) }
   }
 
-  async updateOne(database: string, collection: string, filter: Record<string, unknown>, update: Record<string, unknown>): Promise<{ matchedCount: number; modifiedCount: number }> {
+  async updateOne(database: string, collection: string, filter: Record<string, unknown>, update: Record<string, unknown>, options: MongoOperationOptions = {}): Promise<{ matchedCount: number; modifiedCount: number }> {
     await this.ready()
-    const result = await this.client.db(database).collection(collection).updateOne(filter, update)
+    const result = await this.client.db(database).collection(collection).updateOne(filter, update, { maxTimeMS: options.maxTimeMS })
     return { matchedCount: result.matchedCount, modifiedCount: result.modifiedCount }
   }
 
-  async deleteOne(database: string, collection: string, filter: Record<string, unknown>): Promise<{ deletedCount: number }> {
+  async deleteOne(database: string, collection: string, filter: Record<string, unknown>, options: MongoOperationOptions = {}): Promise<{ deletedCount: number }> {
     await this.ready()
-    const result = await this.client.db(database).collection(collection).deleteOne(filter)
+    const result = await this.client.db(database).collection(collection).deleteOne(filter, { maxTimeMS: options.maxTimeMS })
     return { deletedCount: result.deletedCount }
   }
 }

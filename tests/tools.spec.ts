@@ -82,7 +82,7 @@ describe('dsh-tool-mongodb tools', () => {
       },
       find: async () => [{ _id: 'generated-id-9', status: 'stored' }],
     })
-    const tools = createTools(new MongoDbClient({ url: 'mongodb://db.example.invalid', access }))
+    const tools = createTools(new MongoDbClient({ url: 'mongodb://db.example.invalid', access, allowWrites: true, allowedCollections: ['users'] }))
 
     const insert = tools.find(item => item.name === 'mongo_insert_one')!
     const insertResult = await insert.execute({ database: 'appdb', collection: 'users', docJson: '{"payload":"super-secret-doc-value"}' })
@@ -93,5 +93,30 @@ describe('dsh-tool-mongodb tools', () => {
     const findResult = await find.execute({ database: 'appdb', collection: 'users', filterJson: '{"status":"stored"}', limit: 5 })
     expect(findResult).toMatchObject({ found: true, count: 1 })
     expect(JSON.stringify(findResult)).toContain('generated-id-9')
+  })
+
+  it('returns a stable refusal for write tools when writes are not configured', async () => {
+    const access = fakeAccess({})
+    const tools = createTools(new MongoDbClient({ access }))
+    const insert = tools.find(item => item.name === 'mongo_insert_one')!
+    const update = tools.find(item => item.name === 'mongo_update_one')!
+    const remove = tools.find(item => item.name === 'mongo_delete_one')!
+
+    await expect(insert.execute({ database: 'appdb', collection: 'users', docJson: '{"name":"alice"}' })).resolves.toMatchObject({ ok: false, applied: false })
+    await expect(update.execute({ database: 'appdb', collection: 'users', filterJson: '{"_id":"u1"}', setJson: '{"role":"admin"}' })).resolves.toMatchObject({ ok: false, applied: false })
+    await expect(remove.execute({ database: 'appdb', collection: 'users', filterJson: '{"_id":"u1"}' })).resolves.toMatchObject({ ok: false, applied: false })
+    expect(access.calls).toEqual([])
+  })
+
+  it('does not return raw driver write errors containing document values', async () => {
+    const access = fakeAccess({
+      insert: async () => { throw new Error('E11000 duplicate key error dup key: { email: "secret@example.com" }') },
+    })
+    const tools = createTools(new MongoDbClient({ access, allowWrites: true, allowedCollections: ['users'] }))
+    const insert = tools.find(item => item.name === 'mongo_insert_one')!
+    const result = await insert.execute({ database: 'appdb', collection: 'users', docJson: '{"email":"secret@example.com"}' })
+    expect(result).toMatchObject({ ok: false, applied: false, reason: expect.stringContaining('database rejected') })
+    expect(JSON.stringify(result)).not.toContain('secret@example.com')
+    expect(JSON.stringify(result)).not.toContain('E11000')
   })
 })

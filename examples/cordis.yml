@@ -7,3 +7,7 @@
     # url: 'mongodb://127.0.0.1:27017'
     urlEnv: 'MONGO_URL'
     # serverSelectionTimeoutMs: 5000
+    # queryTimeoutMs: 5000
+    # Writes are disabled by default. Enable only with an exact collection allowlist:
+    # allowWrites: true
+    # allowedCollections: ['users']
