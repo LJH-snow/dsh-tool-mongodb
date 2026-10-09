@@ -101,7 +101,7 @@ describe('MongoDbClient', () => {
 
   it('inserts without echoing the document and updates via $set only', async () => {
     const access = fakeAccess()
-    const fire = clientFor(access)
+    const fire = new MongoDbClient({ access, allowWrites: true, allowedCollections: ['users'] })
     const inserted = await fire.insertOne('appdb', 'users', '{"name":"secret-user-42","role":"ops"}')
     const updated = await fire.updateOne('appdb', 'users', '{"_id":"u1"}', '{"role":"admin"}')
 
@@ -114,9 +114,30 @@ describe('MongoDbClient', () => {
     await expect(fire.updateOne('appdb', 'users', '{}', '{}')).rejects.toThrow('at least one field')
   })
 
+  it('keeps writes disabled by default and never touches the access layer', async () => {
+    const access = fakeAccess()
+    const fire = clientFor(access)
+
+    await expect(fire.insertOne('appdb', 'users', '{"name":"alice"}')).rejects.toThrow('disabled')
+    await expect(fire.updateOne('appdb', 'users', '{"_id":"u1"}', '{"role":"admin"}')).rejects.toThrow('disabled')
+    await expect(fire.deleteOne('appdb', 'users', '{"_id":"u1"}')).rejects.toThrow('disabled')
+    expect(access.calls).toEqual([])
+  })
+
+  it('requires an exact allowed collection before enabling writes', async () => {
+    const access = fakeAccess()
+    const fire = new MongoDbClient({ access, allowWrites: true, allowedCollections: ['users'] })
+
+    await expect(fire.insertOne('appdb', 'orders', '{"id":"o1"}')).rejects.toThrow('allowedCollections')
+    expect(access.calls).toEqual([])
+
+    await expect(fire.insertOne('appdb', 'users', '{"id":"u1"}')).resolves.toMatchObject({ ok: true, applied: true })
+    expect(access.calls).toHaveLength(1)
+  })
+
   it('deletes only with a constraining filter and reports applied state', async () => {
     const access = fakeAccess({ deleteOne: async () => ({ deletedCount: 0 }) })
-    const fire = clientFor(access)
+    const fire = new MongoDbClient({ access, allowWrites: true, allowedCollections: ['sessions'] })
     const removed = await fire.deleteOne('appdb', 'sessions', '{"token":"t-1"}')
     expect(removed).toMatchObject({ ok: true, applied: false, detail: 'deleted=0' })
     await expect(fire.deleteOne('appdb', 'sessions', '{}')).rejects.toThrow('empty filters are rejected')
@@ -134,5 +155,55 @@ describe('MongoDbClient', () => {
     expect(broken.getRedactedUrl()).toBe('(invalid mongodb url)')
     const srv = new MongoDbClient({ url: 'mongodb+srv://bob:pw@cluster.example.invalid/app', access })
     expect(srv.getRedactedUrl()).toBe('mongodb+srv://bob:***@cluster.example.invalid/app')
+  })
+
+  it('rejects regex, geospatial, and unknown operators while retaining safe comparisons', async () => {
+    const access = fakeAccess()
+    const fire = clientFor(access)
+
+    await expect(fire.findDocuments('appdb', 'users', '{"name":{"$regex":"a"}}')).rejects.toThrow('$regex')
+    await expect(fire.findDocuments('appdb', 'users', '{"location":{"$near":{"$geometry":{"type":"Point","coordinates":[0,0]}}}}')).rejects.toThrow('$near')
+    await expect(fire.findDocuments('appdb', 'users', '{"$where":"sleep(100)"}')).rejects.toThrow('$where')
+    await expect(fire.findDocuments('appdb', 'users', '{"$and":[{"age":{"$gte":18}},{"status":{"$eq":"active"}}]}')).resolves.toMatchObject({ count: 2 })
+    expect(access.calls.at(-1)).toContain('find:')
+  })
+
+  it('enforces UTF-8 filter byte limits and redacts credential fields in results', async () => {
+    const access = fakeAccess({
+      findDocuments: async () => [{ password: 'do-not-show', apiKey: 'also-secret', jwt: 'jwt-secret', profile: { accessToken: 'nested-secret' }, displayName: '张三' }],
+    })
+    const fire = clientFor(access)
+    const oversized = '{"note":"' + '中'.repeat(3000) + '"}'
+
+    await expect(fire.findDocuments('appdb', 'users', oversized)).rejects.toThrow('bytes')
+    const result = await fire.findDocuments('appdb', 'users', '{"status":"active"}')
+    expect(result.items[0]).toContain('"password":"<redacted>"')
+    expect(result.items[0]).toContain('"apiKey":"<redacted>"')
+    expect(result.items[0]).toContain('"jwt":"<redacted>"')
+    expect(result.items[0]).toContain('"accessToken":"<redacted>"')
+    expect(result.items[0]).toContain('"displayName":"张三"')
+  })
+
+  it('caps returned documents even when an access layer over-returns', async () => {
+    const access = fakeAccess({
+      findDocuments: async () => Array.from({ length: 30 }, (_, index) => ({ index })),
+    })
+    const result = await clientFor(access).findDocuments('appdb', 'users', '{}', 20)
+
+    expect(result.count).toBe(20)
+    expect(result.items).toHaveLength(20)
+  })
+
+  it('forwards a bounded server-side execution timeout to document queries', async () => {
+    let maxTimeMS: number | undefined
+    const access = fakeAccess({
+      findDocuments: async (_db, _collection, _filter, _limit, options) => {
+        maxTimeMS = options?.maxTimeMS
+        return []
+      },
+    })
+    await new MongoDbClient({ access, queryTimeoutMs: 1234 }).findDocuments('appdb', 'users', '{}')
+
+    expect(maxTimeMS).toBe(1234)
   })
 })

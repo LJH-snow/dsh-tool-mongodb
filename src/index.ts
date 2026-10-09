@@ -13,6 +13,12 @@ export interface MongoDBPluginConfig {
   urlEnv?: string
   /** Server selection timeout in milliseconds (default 5000). */
   serverSelectionTimeoutMs?: number
+  /** Enable write tools explicitly; defaults to false. */
+  allowWrites?: boolean
+  /** Exact collection names permitted for writes when allowWrites is true. */
+  allowedCollections?: string[]
+  /** Server-side operation timeout in milliseconds (default 5000, max 60000). */
+  queryTimeoutMs?: number
 }
 
 export function apply(ctx: Context, config: MongoDBPluginConfig = {}) {
@@ -20,6 +26,9 @@ export function apply(ctx: Context, config: MongoDBPluginConfig = {}) {
   const client = new MongoDbClient({
     url: config.url ?? process.env[urlEnv],
     serverSelectionTimeoutMs: config.serverSelectionTimeoutMs,
+    allowWrites: config.allowWrites,
+    allowedCollections: config.allowedCollections,
+    queryTimeoutMs: config.queryTimeoutMs,
   })
   for (const tool of createTools(client)) ctx.tools.register(tool)
 }
@@ -34,6 +43,23 @@ function unavailable(reason: string) {
 
 function errorReason(error: unknown): string {
   return error instanceof MongoError ? error.message : error instanceof Error ? error.message : String(error)
+}
+
+function writeErrorReason(error: unknown): string {
+  // Driver errors can include duplicate-key values, validation documents, or
+  // server-side query text. Never pass those details through a write tool.
+  if (error instanceof MongoError) return error.message
+  return 'MongoDB write failed: the database rejected the operation.'
+}
+
+function writeFailure(error: unknown, args: Record<string, unknown>) {
+  return {
+    ok: false,
+    applied: false,
+    database: typeof args.database === 'string' ? args.database : undefined,
+    collection: typeof args.collection === 'string' ? args.collection : undefined,
+    reason: writeErrorReason(error),
+  }
 }
 
 const LIST_RENDER_LIMIT = 20
@@ -168,7 +194,7 @@ export function createTools(client: MongoDbClient) {
 
     defineTool({
       name: 'mongo_insert_one',
-      description: 'Insert one document from a JSON object. WRITE operation; the document is never echoed back.',
+      description: 'Insert one document from a JSON object. WRITE is disabled by default and requires allowWrites=true plus an exact allowedCollections entry; the document is never echoed back.',
       parameters: {
         database: { type: 'string', required: true, description: 'Database name' },
         collection: { type: 'string', required: true, description: 'Collection name' },
@@ -182,13 +208,13 @@ export function createTools(client: MongoDbClient) {
       async execute(args) {
         if (!args.database || !args.collection || !args.docJson) return { ok: false, reason: 'database, collection, and docJson are required.' }
         try { return await client.insertOne(args.database as string, args.collection as string, args.docJson) }
-        catch (error) { return { ok: false, reason: errorReason(error) } }
+        catch (error) { return writeFailure(error, args as Record<string, unknown>) }
       },
     }),
 
     defineTool({
       name: 'mongo_update_one',
-      description: 'Update the first document matching a JSON filter via $set only. WRITE operation.',
+      description: 'Update the first document matching a JSON filter via $set only. WRITE is disabled by default and requires allowWrites=true plus an exact allowedCollections entry.',
       parameters: {
         database: { type: 'string', required: true, description: 'Database name' },
         collection: { type: 'string', required: true, description: 'Collection name' },
@@ -203,13 +229,13 @@ export function createTools(client: MongoDbClient) {
       async execute(args) {
         if (!args.database || !args.collection || !args.filterJson || !args.setJson) return { ok: false, reason: 'database, collection, filterJson, and setJson are required.' }
         try { return await client.updateOne(args.database as string, args.collection as string, args.filterJson, args.setJson) }
-        catch (error) { return { ok: false, reason: errorReason(error) } }
+        catch (error) { return writeFailure(error, args as Record<string, unknown>) }
       },
     }),
 
     defineTool({
       name: 'mongo_delete_one',
-      description: 'Delete the first document matching a JSON filter. WRITE operation; empty filters are rejected.',
+      description: 'Delete the first document matching a JSON filter. WRITE is disabled by default and requires allowWrites=true plus an exact allowedCollections entry; empty filters are rejected.',
       parameters: {
         database: { type: 'string', required: true, description: 'Database name' },
         collection: { type: 'string', required: true, description: 'Collection name' },
@@ -223,7 +249,7 @@ export function createTools(client: MongoDbClient) {
       async execute(args) {
         if (!args.database || !args.collection || !args.filterJson) return { ok: false, reason: 'database, collection, and filterJson are required.' }
         try { return await client.deleteOne(args.database as string, args.collection as string, args.filterJson) }
-        catch (error) { return { ok: false, reason: errorReason(error) } }
+        catch (error) { return writeFailure(error, args as Record<string, unknown>) }
       },
     }),
   ]

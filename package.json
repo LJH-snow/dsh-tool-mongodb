@@ -1,7 +1,7 @@
 {
   "name": "@libai168/dsh-tool-mongodb",
-  "description": "MongoDB inspection and guarded write tools for DeepSeek Harness: server info, collections, capped document reads, and explicit insert/update/delete",
-  "version": "0.1.0",
+  "description": "MongoDB inspection and guarded read tools for DeepSeek Harness with opt-in exact-allowlist insert/update/delete operations",
+  "version": "0.2.0",
   "type": "module",
   "main": "lib/index.js",
   "types": "lib/types/index.d.ts",
